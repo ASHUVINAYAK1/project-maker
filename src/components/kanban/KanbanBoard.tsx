@@ -79,7 +79,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ onAddFeature, onEditFe
         // Handle drag over logic if needed for real-time feedback
     };
 
-    const handleDragEnd = (event: DragEndEvent) => {
+    const handleDragEnd = async (event: DragEndEvent) => {
         const { active, over } = event;
         setActiveId(null);
 
@@ -106,7 +106,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ onAddFeature, onEditFe
 
         // Only move if status changed or order changed
         if (feature.status !== targetStatus) {
-            moveFeature(featureId, targetStatus);
+            await moveFeature(featureId, targetStatus);
 
             // TODO: Trigger automation when moving to 'todo'
             // if (targetStatus === 'todo' && feature.status !== 'todo') {

@@ -52,7 +52,7 @@ export const CreateProjectDialog: React.FC<CreateProjectDialogProps> = ({ open, 
         setIsCreating(true);
 
         try {
-            createProject(name.trim(), description.trim(), path.trim());
+            await createProject(name.trim(), description.trim(), path.trim());
             handleClose();
         } catch (error) {
             console.error('Failed to create project:', error);

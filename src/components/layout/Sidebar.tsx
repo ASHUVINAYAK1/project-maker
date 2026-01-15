@@ -8,7 +8,7 @@ import {
     ChevronRight
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { useProjectStore } from '../../stores';
+import { useProjectStore, useSettingsStore } from '../../stores';
 import type { Project } from '../../types';
 
 interface SidebarProps {
@@ -18,6 +18,7 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ onCreateProject, onOpenSettings }) => {
     const { projects, activeProjectId, setActiveProject } = useProjectStore();
+    const settings = useSettingsStore((state) => state.settings);
 
     return (
         <aside className="w-72 flex flex-col h-full bg-slate-950 border-r border-slate-800">
@@ -78,8 +79,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCreateProject, onOpenSetting
 
             {/* Bottom Section */}
             <div className="p-4 border-t border-slate-800 space-y-1">
-                <SidebarButton icon={<Cpu size={18} />} label="Ollama Status" badge="Connected" badgeColor="green" />
-                <SidebarButton icon={<Github size={18} />} label="GitHub" badge="Not connected" badgeColor="gray" />
+                <SidebarButton
+                    icon={<Cpu size={18} />}
+                    label="Ollama Status"
+                    badge={settings.ollama.isConnected ? "Connected" : "Disconnected"}
+                    badgeColor={settings.ollama.isConnected ? "green" : "red"}
+                />
+                <SidebarButton
+                    icon={<Github size={18} />}
+                    label="GitHub"
+                    badge={settings.github.isConnected ? "Connected" : "Not connected"}
+                    badgeColor={settings.github.isConnected ? "green" : "gray"}
+                />
                 <SidebarButton icon={<Settings size={18} />} label="Settings" onClick={onOpenSettings} />
             </div>
         </aside>

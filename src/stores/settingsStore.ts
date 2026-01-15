@@ -1,28 +1,32 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import dbService from '../lib/db';
 import type { AppSettings, OllamaSettings, GitHubSettings } from '../types';
 
 interface SettingsState {
     settings: AppSettings;
+    isLoading: boolean;
 }
 
 interface SettingsActions {
+    // Initialization
+    init: () => Promise<void>;
+
     // Theme
-    setTheme: (theme: AppSettings['theme']) => void;
+    setTheme: (theme: AppSettings['theme']) => Promise<void>;
 
     // Ollama
-    updateOllamaSettings: (updates: Partial<OllamaSettings>) => void;
+    updateOllamaSettings: (updates: Partial<OllamaSettings>) => Promise<void>;
 
     // GitHub  
-    updateGitHubSettings: (updates: Partial<GitHubSettings>) => void;
-    setGitHubToken: (token: string) => void;
-    clearGitHubToken: () => void;
+    updateGitHubSettings: (updates: Partial<GitHubSettings>) => Promise<void>;
+    setGitHubToken: (token: string) => Promise<void>;
+    clearGitHubToken: () => Promise<void>;
 
     // Project defaults
-    setDefaultProjectPath: (path: string) => void;
+    setDefaultProjectPath: (path: string) => Promise<void>;
 
     // Reset
-    resetSettings: () => void;
+    resetSettings: () => Promise<void>;
 }
 
 const defaultSettings: AppSettings = {
@@ -38,87 +42,142 @@ const defaultSettings: AppSettings = {
     defaultProjectPath: '',
 };
 
-export const useSettingsStore = create<SettingsState & SettingsActions>()(
-    persist(
-        (set) => ({
-            // State
-            settings: defaultSettings,
+export const useSettingsStore = create<SettingsState & SettingsActions>((set, get) => ({
+    // State
+    settings: defaultSettings,
+    isLoading: false,
 
-            // Actions
-            setTheme: (theme) => {
-                set((state) => ({
-                    settings: { ...state.settings, theme },
-                }));
+    // Actions
+    init: async () => {
+        set({ isLoading: true });
+        try {
+            const results = await dbService.query<any>('SELECT value FROM settings WHERE id = "appSettings"');
+            if (results.length > 0) {
+                const savedSettings = JSON.parse(results[0].value);
+                const mergedSettings = { ...defaultSettings, ...savedSettings };
+                set({ settings: mergedSettings });
 
-                // Apply theme to document
+                // Apply theme
+                const theme = mergedSettings.theme;
                 const root = document.documentElement;
                 root.classList.remove('light', 'dark');
-
                 if (theme === 'system') {
                     const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
                     root.classList.add(isDark ? 'dark' : 'light');
                 } else {
                     root.classList.add(theme);
                 }
-            },
-
-            updateOllamaSettings: (updates) => {
-                set((state) => ({
-                    settings: {
-                        ...state.settings,
-                        ollama: { ...state.settings.ollama, ...updates },
-                    },
-                }));
-            },
-
-            updateGitHubSettings: (updates) => {
-                set((state) => ({
-                    settings: {
-                        ...state.settings,
-                        github: { ...state.settings.github, ...updates },
-                    },
-                }));
-            },
-
-            setGitHubToken: (token) => {
-                set((state) => ({
-                    settings: {
-                        ...state.settings,
-                        github: {
-                            ...state.settings.github,
-                            token,
-                            isConnected: true,
-                        },
-                    },
-                }));
-            },
-
-            clearGitHubToken: () => {
-                set((state) => ({
-                    settings: {
-                        ...state.settings,
-                        github: {
-                            isConnected: false,
-                            token: undefined,
-                            username: undefined,
-                        },
-                    },
-                }));
-            },
-
-            setDefaultProjectPath: (path) => {
-                set((state) => ({
-                    settings: { ...state.settings, defaultProjectPath: path },
-                }));
-            },
-
-            resetSettings: () => {
-                set({ settings: defaultSettings });
-            },
-        }),
-        {
-            name: 'project-maker-settings',
-            storage: createJSONStorage(() => localStorage),
+            } else {
+                // Initial save of defaults
+                await dbService.execute(
+                    'INSERT INTO settings (id, value) VALUES ("appSettings", ?)',
+                    [JSON.stringify(defaultSettings)]
+                );
+            }
+            set({ isLoading: false });
+        } catch (error) {
+            console.error('Failed to init settings store:', error);
+            set({ isLoading: false });
         }
-    )
-);
+    },
+
+    setTheme: async (theme) => {
+        const newSettings = { ...get().settings, theme };
+        set({ settings: newSettings });
+
+        // Persist
+        await dbService.execute(
+            'UPDATE settings SET value = ? WHERE id = "appSettings"',
+            [JSON.stringify(newSettings)]
+        );
+
+        // Apply theme to document
+        const root = document.documentElement;
+        root.classList.remove('light', 'dark');
+
+        if (theme === 'system') {
+            const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            root.classList.add(isDark ? 'dark' : 'light');
+        } else {
+            root.classList.add(theme);
+        }
+    },
+
+    updateOllamaSettings: async (updates) => {
+        const newSettings = {
+            ...get().settings,
+            ollama: { ...get().settings.ollama, ...updates },
+        };
+        set({ settings: newSettings });
+
+        await dbService.execute(
+            'UPDATE settings SET value = ? WHERE id = "appSettings"',
+            [JSON.stringify(newSettings)]
+        );
+    },
+
+    updateGitHubSettings: async (updates) => {
+        const newSettings = {
+            ...get().settings,
+            github: { ...get().settings.github, ...updates },
+        };
+        set({ settings: newSettings });
+
+        await dbService.execute(
+            'UPDATE settings SET value = ? WHERE id = "appSettings"',
+            [JSON.stringify(newSettings)]
+        );
+    },
+
+    setGitHubToken: async (token) => {
+        const newSettings = {
+            ...get().settings,
+            github: {
+                ...get().settings.github,
+                token,
+                isConnected: true,
+            },
+        };
+        set({ settings: newSettings });
+
+        await dbService.execute(
+            'UPDATE settings SET value = ? WHERE id = "appSettings"',
+            [JSON.stringify(newSettings)]
+        );
+    },
+
+    clearGitHubToken: async () => {
+        const newSettings = {
+            ...get().settings,
+            github: {
+                isConnected: false,
+                token: undefined,
+                username: undefined,
+            },
+        };
+        set({ settings: newSettings });
+
+        await dbService.execute(
+            'UPDATE settings SET value = ? WHERE id = "appSettings"',
+            [JSON.stringify(newSettings)]
+        );
+    },
+
+    setDefaultProjectPath: async (path) => {
+        const newSettings = { ...get().settings, defaultProjectPath: path };
+        set({ settings: newSettings });
+
+        await dbService.execute(
+            'UPDATE settings SET value = ? WHERE id = "appSettings"',
+            [JSON.stringify(newSettings)]
+        );
+    },
+
+    resetSettings: async () => {
+        set({ settings: defaultSettings });
+        await dbService.execute(
+            'UPDATE settings SET value = ? WHERE id = "appSettings"',
+            [JSON.stringify(defaultSettings)]
+        );
+    },
+}));

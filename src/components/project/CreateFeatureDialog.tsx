@@ -73,14 +73,14 @@ export const CreateFeatureDialog: React.FC<CreateFeatureDialogProps> = ({
                 .filter(Boolean);
 
             if (editFeature) {
-                updateFeature(editFeature.id, {
+                await updateFeature(editFeature.id, {
                     title: title.trim(),
                     description: description.trim(),
                     keyPoints,
                     estimatedComplexity: complexity,
                 });
             } else {
-                createFeature(activeProjectId, {
+                await createFeature(activeProjectId, {
                     title: title.trim(),
                     description: description.trim(),
                     keyPoints,

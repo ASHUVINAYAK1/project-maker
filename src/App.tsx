@@ -1,29 +1,40 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { KanbanBoard } from './components/kanban';
 import { CreateProjectDialog, CreateFeatureDialog } from './components/project';
-import { useSettingsStore } from './stores';
+import { GenerateFeaturesDialog } from './components/llm';
+import { SettingsDialog } from './components/settings';
+import { useSettingsStore, useProjectStore, useFeatureStore } from './stores';
 import type { Feature } from './types';
 
 function App() {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isCreateFeatureOpen, setIsCreateFeatureOpen] = useState(false);
+  const [isGenerateFeaturesOpen, setIsGenerateFeaturesOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [editingFeature, setEditingFeature] = useState<Feature | null>(null);
-  const [_isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // Apply theme on mount
-  React.useEffect(() => {
-    const theme = useSettingsStore.getState().settings.theme;
-    const root = document.documentElement;
+  const initSettings = useSettingsStore((state) => state.init);
+  const initProjects = useProjectStore((state) => state.init);
+  const initFeatures = useFeatureStore((state) => state.init);
+  const activeProjectId = useProjectStore((state) => state.activeProjectId);
 
-    if (theme === 'system') {
-      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.classList.add(isDark ? 'dark' : 'light');
-    } else {
-      root.classList.add(theme);
+  // Initialize data on mount
+  useEffect(() => {
+    const initData = async () => {
+      await initSettings();
+      await initProjects();
+    };
+    initData();
+  }, [initSettings, initProjects]);
+
+  // Load features when active project changes
+  useEffect(() => {
+    if (activeProjectId) {
+      initFeatures(activeProjectId);
     }
-  }, []);
+  }, [activeProjectId, initFeatures]);
 
   const handleEditFeature = (feature: Feature) => {
     setEditingFeature(feature);
@@ -41,8 +52,7 @@ function App() {
   };
 
   const handleGenerateFeatures = () => {
-    // TODO: Open LLM feature generation dialog
-    console.log('Generate features clicked');
+    setIsGenerateFeaturesOpen(true);
   };
 
   return (
@@ -76,6 +86,16 @@ function App() {
         open={isCreateFeatureOpen}
         onClose={handleCloseFeatureDialog}
         editFeature={editingFeature}
+      />
+
+      <GenerateFeaturesDialog
+        open={isGenerateFeaturesOpen}
+        onClose={() => setIsGenerateFeaturesOpen(false)}
+      />
+
+      <SettingsDialog
+        open={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
       />
     </div>
   );
