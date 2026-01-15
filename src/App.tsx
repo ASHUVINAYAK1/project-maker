@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import dbService from './lib/db';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { KanbanBoard } from './components/kanban';
@@ -22,11 +23,18 @@ function App() {
 
   // Initialize data on mount
   useEffect(() => {
-    const initData = async () => {
-      await initSettings();
-      await initProjects();
+    const initApp = async () => {
+      try {
+        // Ensure DB is ready first
+        await dbService.init();
+
+        await initSettings();
+        await initProjects();
+      } catch (error) {
+        console.error('Failed to initialize app:', error);
+      }
     };
-    initData();
+    initApp();
   }, [initSettings, initProjects]);
 
   // Load features when active project changes

@@ -108,10 +108,11 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ onAddFeature, onEditFe
         if (feature.status !== targetStatus) {
             await moveFeature(featureId, targetStatus);
 
-            // TODO: Trigger automation when moving to 'todo'
-            // if (targetStatus === 'todo' && feature.status !== 'todo') {
-            //   startAutomation(featureId);
-            // }
+            // Trigger automation when moving to 'todo'
+            if (targetStatus === 'todo' && feature.status !== 'todo') {
+                // We'll use a custom event or a store call here
+                window.dispatchEvent(new CustomEvent('start-automation', { detail: { featureId } }));
+            }
         }
     };
 

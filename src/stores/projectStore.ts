@@ -45,7 +45,7 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
     init: async () => {
         set({ isLoading: true });
         try {
-            const dbProjects = await dbService.query<any>('SELECT * FROM projects ORDER BY updatedAt DESC');
+            const dbProjects = await dbService.query<any>('SELECT * FROM Projects ORDER BY updatedAt DESC');
 
             const projects: Project[] = dbProjects.map(p => ({
                 ...p,
@@ -54,8 +54,8 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
                 updatedAt: new Date(p.updatedAt),
             }));
 
-            // Get active project from settings table or use the first one
-            const activeSettings = await dbService.query<any>('SELECT value FROM settings WHERE id = "activeProjectId"');
+            // Get active project from Settings table or use the first one
+            const activeSettings = await dbService.query<any>("SELECT value FROM Settings WHERE id = 'activeProjectId'");
             const activeProjectId = activeSettings.length > 0 ? JSON.parse(activeSettings[0].value) : (projects[0]?.id || null);
 
             set({ projects, activeProjectId, isLoading: false });
@@ -71,11 +71,24 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
         const id = uuidv4();
         const projectSettings = { ...defaultSettings, ...settings };
 
+        const tenantId = dbService.getTenantId();
+        const userId = dbService.getUserId();
+
+        // Check if project with same path already exists
+        const existing = get().projects.find(p => p.path === path);
+        if (existing) {
+            console.warn('[ProjectStore] Project with path already exists:', path);
+            set({ activeProjectId: existing.id });
+            return existing;
+        }
+
         const newProject: Project = {
             id,
             name,
             description,
             path,
+            tenantId,
+            userId,
             createdAt: new Date(now),
             updatedAt: new Date(now),
             settings: projectSettings,
@@ -83,10 +96,13 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
 
         try {
             console.log(`[ProjectStore] Attempting database insert for project: ${id}`);
+            const tenantId = dbService.getTenantId();
+            const userId = dbService.getUserId();
+
             await dbService.execute(
-                `INSERT INTO projects (id, name, path, description, settings, createdAt, updatedAt) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [id, name, path, description, dbService.serialize(projectSettings), now, now]
+                `INSERT INTO Projects (id, name, path, description, settings, tenantId, userId, createdAt, updatedAt) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [id, name, path, description, dbService.serialize(projectSettings), tenantId, userId, now, now]
             );
             console.log('[ProjectStore] Database insert successful.');
 
@@ -97,8 +113,12 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
 
             // Save active project id
             console.log('[ProjectStore] Updating activeProjectId in settings...');
+            try {
+                await dbService.execute("DELETE FROM Settings WHERE id = 'activeProjectId'");
+            } catch (e) { /* ignore if doesn't exist */ }
+
             await dbService.execute(
-                'INSERT OR REPLACE INTO settings (id, value) VALUES ("activeProjectId", ?)',
+                "INSERT INTO Settings (id, value) VALUES ('activeProjectId', ?)",
                 [JSON.stringify(id)]
             );
             console.log('[ProjectStore] Active project updated.');
@@ -122,6 +142,8 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
 
             // Generate SQL dynamically based on updates
             const fields = Object.keys(updates);
+            if (fields.length === 0) return;
+
             const setClause = fields.map(f => `${f} = ?`).join(', ') + ', updatedAt = ?';
             const values = fields.map(f => {
                 const val = (updates as any)[f];
@@ -131,7 +153,7 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
             values.push(id);
 
             await dbService.execute(
-                `UPDATE projects SET ${setClause} WHERE id = ?`,
+                `UPDATE Projects SET ${setClause} WHERE id = ?`,
                 values
             );
 
@@ -148,25 +170,31 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
 
     deleteProject: async (id) => {
         try {
-            await dbService.execute('DELETE FROM projects WHERE id = ?', [id]);
-            // Cascading delete is handled by SQLite FOREIGN KEY if enabled, 
-            // but we should also clean up features manually to be sure
-            await dbService.execute('DELETE FROM features WHERE projectId = ?', [id]);
+            await dbService.execute("DELETE FROM Projects WHERE id = ?", [id]);
+            // Cascading delete is handled by SQL Server if ON DELETE CASCADE is set,
+            // but we'll be explicit for now.
+            await dbService.execute("DELETE FROM Features WHERE projectId = ?", [id]);
 
-            set((state) => {
-                const newProjects = state.projects.filter((project) => project.id !== id);
-                const nextActiveId = state.activeProjectId === id ? (newProjects[0]?.id || null) : state.activeProjectId;
+            const state = get();
+            const newProjects = state.projects.filter((project) => project.id !== id);
+            const nextActiveId = state.activeProjectId === id ? (newProjects[0]?.id || null) : state.activeProjectId;
 
-                // Save next active project id
-                dbService.execute(
-                    'INSERT OR REPLACE INTO settings (id, value) VALUES ("activeProjectId", ?)',
-                    [JSON.stringify(nextActiveId)]
-                ).catch(err => console.error('Failed to update active project after delete:', err));
+            // Save next active project id
+            try {
+                await dbService.execute("DELETE FROM Settings WHERE id = 'activeProjectId'");
+                if (nextActiveId) {
+                    await dbService.execute(
+                        "INSERT INTO Settings (id, value) VALUES ('activeProjectId', ?)",
+                        [JSON.stringify(nextActiveId)]
+                    );
+                }
+            } catch (err) {
+                console.error('Failed to update active project after delete:', err);
+            }
 
-                return {
-                    projects: newProjects,
-                    activeProjectId: nextActiveId,
-                };
+            set({
+                projects: newProjects,
+                activeProjectId: nextActiveId,
             });
         } catch (error) {
             console.error('Failed to delete project:', error);
@@ -175,12 +203,28 @@ export const useProjectStore = create<ProjectState & ProjectActions>((set, get) 
     },
 
     setActiveProject: async (id) => {
+        console.log('[ProjectStore] Setting active project:', id);
+
+        // Optimistic update: Update state immediately for instant UI feedback
+        set({ activeProjectId: id });
+
         try {
-            await dbService.execute(
-                'INSERT OR REPLACE INTO settings (id, value) VALUES ("activeProjectId", ?)',
-                [JSON.stringify(id)]
-            );
-            set({ activeProjectId: id });
+            // Run DB persistence in the background
+            (async () => {
+                try {
+                    await dbService.execute("DELETE FROM Settings WHERE id = 'activeProjectId'");
+                    if (id) {
+                        await dbService.execute(
+                            "INSERT INTO Settings (id, value) VALUES ('activeProjectId', ?)",
+                            [JSON.stringify(id)]
+                        );
+                    }
+                } catch (dbError) {
+                    console.error('[ProjectStore] Background DB update failed:', dbError);
+                }
+            })();
+
+            console.log('[ProjectStore] Active project switched in UI.');
         } catch (error) {
             console.error('Failed to set active project:', error);
         }

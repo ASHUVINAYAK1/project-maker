@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { FolderOpen } from 'lucide-react';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
     Dialog,
     DialogHeader,
@@ -50,13 +51,16 @@ export const CreateProjectDialog: React.FC<CreateProjectDialogProps> = ({ open, 
         if (!validateForm()) return;
 
         setIsCreating(true);
+        setErrors({});
 
         try {
             await createProject(name.trim(), description.trim(), path.trim());
             handleClose();
-        } catch (error) {
+        } catch (error: any) {
             console.error('Failed to create project:', error);
-            setErrors({ submit: 'Failed to create project. Please try again.' });
+            // Handle both Error objects and string errors from Rust
+            const msg = typeof error === 'string' ? error : (error?.message || 'Failed to create project. Please try again.');
+            setErrors({ submit: msg });
         } finally {
             setIsCreating(false);
         }
@@ -71,11 +75,17 @@ export const CreateProjectDialog: React.FC<CreateProjectDialogProps> = ({ open, 
     };
 
     const handleBrowse = async () => {
-        // In Tauri, we would use the dialog API
-        // For now, just show a placeholder path
-        // TODO: Integrate with Tauri dialog
-        const defaultPath = 'C:\\Users\\Projects\\' + (name || 'my-project').toLowerCase().replace(/\s+/g, '-');
-        setPath(defaultPath);
+        try {
+            const selected = await openDialog({
+                directory: true,
+                multiple: false,
+            });
+            if (selected) {
+                setPath(selected as string);
+            }
+        } catch (error) {
+            console.error('Failed to open dialog:', error);
+        }
     };
 
     return (

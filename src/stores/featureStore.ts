@@ -52,7 +52,7 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
         set({ isLoading: true });
         try {
             const dbFeatures = await dbService.query<any>(
-                'SELECT * FROM features WHERE projectId = ? ORDER BY orderIndex ASC',
+                'SELECT * FROM Features WHERE projectId = ? ORDER BY orderIndex ASC',
                 [projectId]
             );
 
@@ -89,6 +89,7 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
             title: data.title || 'New Feature',
             description: data.description || '',
             status: data.status || 'backlog',
+            priority: data.priority || 'medium',
             order: orderIndex,
             keyPoints: data.keyPoints || [],
             acceptanceCriteria: data.acceptanceCriteria || [],
@@ -103,23 +104,9 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
 
         try {
             await dbService.execute(
-                `INSERT INTO features (
-          id, projectId, title, description, status, priority, complexity, 
-          keyPoints, acceptanceCriteria, suggestedTests, dependencies, 
-          automationStatus, automationLogs, createdAt, updatedAt, orderIndex
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    id, projectId, newFeature.title, newFeature.description, newFeature.status,
-                    'medium', // priority default
-                    newFeature.estimatedComplexity,
-                    dbService.serialize(newFeature.keyPoints),
-                    dbService.serialize(newFeature.acceptanceCriteria),
-                    dbService.serialize(newFeature.suggestedTests),
-                    dbService.serialize(newFeature.dependencies),
-                    newFeature.automationStatus,
-                    dbService.serialize(newFeature.automationLogs),
-                    now, now, orderIndex
-                ]
+                `INSERT INTO Features (id, projectId, title, description, status, priority, complexity, keyPoints, acceptanceCriteria, suggestedTests, dependencies, automationStatus, automationLogs, orderIndex, createdAt, updatedAt) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [id, projectId, newFeature.title, newFeature.description, newFeature.status, newFeature.priority, newFeature.estimatedComplexity, dbService.serialize(newFeature.keyPoints), dbService.serialize(newFeature.acceptanceCriteria), dbService.serialize(newFeature.suggestedTests), dbService.serialize(newFeature.dependencies), newFeature.automationStatus, dbService.serialize(newFeature.automationLogs), orderIndex, now, now]
             );
 
             set((state) => ({
@@ -149,6 +136,7 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
                     title: gen.title,
                     description: gen.description,
                     status: 'backlog',
+                    priority: 'medium',
                     order: currentOrder,
                     keyPoints: gen.keyPoints,
                     acceptanceCriteria: gen.acceptanceCriteria,
@@ -162,24 +150,11 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
                 };
 
                 await dbService.execute(
-                    `INSERT INTO features (
-            id, projectId, title, description, status, priority, complexity, 
-            keyPoints, acceptanceCriteria, suggestedTests, dependencies, 
-            automationStatus, automationLogs, createdAt, updatedAt, orderIndex
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [
-                        id, projectId, feature.title, feature.description, feature.status,
-                        'medium',
-                        feature.estimatedComplexity,
-                        dbService.serialize(feature.keyPoints),
-                        dbService.serialize(feature.acceptanceCriteria),
-                        dbService.serialize(feature.suggestedTests),
-                        dbService.serialize(feature.dependencies),
-                        feature.automationStatus,
-                        dbService.serialize(feature.automationLogs),
-                        now, now, currentOrder
-                    ]
+                    `INSERT INTO Features (id, projectId, title, description, status, priority, complexity, keyPoints, acceptanceCriteria, suggestedTests, dependencies, automationStatus, automationLogs, orderIndex, createdAt, updatedAt) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [id, projectId, feature.title, feature.description, feature.status, feature.priority, feature.estimatedComplexity, dbService.serialize(feature.keyPoints), dbService.serialize(feature.acceptanceCriteria), dbService.serialize(feature.suggestedTests), dbService.serialize(feature.dependencies), feature.automationStatus, dbService.serialize(feature.automationLogs), currentOrder, now, now]
                 );
+
                 newFeatures.push(feature);
             }
 
@@ -196,34 +171,41 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
 
     updateFeature: async (id, updates) => {
         const now = new Date().toISOString();
+        const state = get();
+        const feature = state.features.find(f => f.id === id);
+        if (!feature) return;
 
         try {
-            const currentFeature = get().features.find(f => f.id === id);
-            if (!currentFeature) return;
+            const setClauses: string[] = [];
+            const values: any[] = [];
 
-            const updatedFeature = { ...currentFeature, ...updates, updatedAt: new Date(now) };
+            // Map frontend fields to DB columns
+            if (updates.title !== undefined) { setClauses.push('title = ?'); values.push(updates.title); }
+            if (updates.description !== undefined) { setClauses.push('description = ?'); values.push(updates.description); }
+            if (updates.status !== undefined) { setClauses.push('status = ?'); values.push(updates.status); }
+            if (updates.priority !== undefined) { setClauses.push('priority = ?'); values.push(updates.priority); }
+            if (updates.order !== undefined) { setClauses.push('orderIndex = ?'); values.push(updates.order); }
+            if (updates.keyPoints !== undefined) { setClauses.push('keyPoints = ?'); values.push(dbService.serialize(updates.keyPoints)); }
+            if (updates.acceptanceCriteria !== undefined) { setClauses.push('acceptanceCriteria = ?'); values.push(dbService.serialize(updates.acceptanceCriteria)); }
+            if (updates.suggestedTests !== undefined) { setClauses.push('suggestedTests = ?'); values.push(dbService.serialize(updates.suggestedTests)); }
+            if (updates.estimatedComplexity !== undefined) { setClauses.push('complexity = ?'); values.push(updates.estimatedComplexity); }
+            if (updates.dependencies !== undefined) { setClauses.push('dependencies = ?'); values.push(dbService.serialize(updates.dependencies)); }
+            if (updates.automationStatus !== undefined) { setClauses.push('automationStatus = ?'); values.push(updates.automationStatus); }
 
-            const fields = Object.keys(updates);
-            const setClause = fields.map(f => {
-                const dbField = f === 'order' ? 'orderIndex' : f;
-                return `${dbField} = ?`;
-            }).join(', ') + ', updatedAt = ?';
+            if (setClauses.length > 0) {
+                setClauses.push('updatedAt = ?');
+                values.push(now);
+                values.push(id);
 
-            const values = fields.map(f => {
-                const val = (updates as any)[f];
-                return typeof val === 'object' ? dbService.serialize(val) : val;
-            });
-            values.push(now);
-            values.push(id);
+                await dbService.execute(
+                    `UPDATE Features SET ${setClauses.join(', ')} WHERE id = ?`,
+                    values
+                );
 
-            await dbService.execute(
-                `UPDATE features SET ${setClause} WHERE id = ?`,
-                values
-            );
-
-            set((state) => ({
-                features: state.features.map((f) => f.id === id ? updatedFeature : f),
-            }));
+                set((state) => ({
+                    features: state.features.map(f => f.id === id ? { ...f, ...updates, updatedAt: new Date(now) } : f),
+                }));
+            }
         } catch (error) {
             console.error('Failed to update feature:', error);
             throw error;
@@ -232,9 +214,9 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
 
     deleteFeature: async (id) => {
         try {
-            await dbService.execute('DELETE FROM features WHERE id = ?', [id]);
+            await dbService.execute('DELETE FROM Features WHERE id = ?', [id]);
             set((state) => ({
-                features: state.features.filter((f) => f.id !== id),
+                features: state.features.filter(f => f.id !== id),
             }));
         } catch (error) {
             console.error('Failed to delete feature:', error);
@@ -243,39 +225,28 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
     },
 
     getFeaturesByProject: (projectId) => {
-        return get().features
-            .filter((f) => f.projectId === projectId)
-            .sort((a, b) => a.order - b.order);
+        return get().features.filter(f => f.projectId === projectId);
     },
 
     getFeaturesByStatus: (projectId, status) => {
-        return get().features
-            .filter((f) => f.projectId === projectId && f.status === status)
-            .sort((a, b) => a.order - b.order);
+        return get().features.filter(f => f.projectId === projectId && f.status === status);
     },
 
     getFeatureById: (id) => {
-        return get().features.find((f) => f.id === id);
+        return get().features.find(f => f.id === id);
     },
 
     moveFeature: async (id, newStatus, newOrderIndex) => {
+        const now = new Date().toISOString();
         try {
-            const state = get();
-            const feature = state.features.find((f) => f.id === id);
-            if (!feature) return;
-
-            const now = new Date().toISOString();
-            const orderIndex = newOrderIndex ?? (state.features
-                .filter(f => f.projectId === feature.projectId && f.status === newStatus).length);
-
             await dbService.execute(
-                'UPDATE features SET status = ?, orderIndex = ?, updatedAt = ? WHERE id = ?',
-                [newStatus, orderIndex, now, id]
+                'UPDATE Features SET status = ?, orderIndex = ?, updatedAt = ? WHERE id = ?',
+                [newStatus, newOrderIndex ?? 0, now, id]
             );
 
             set((state) => ({
-                features: state.features.map((f) =>
-                    f.id === id ? { ...f, status: newStatus, order: orderIndex, updatedAt: new Date(now) } : f
+                features: state.features.map(f =>
+                    f.id === id ? { ...f, status: newStatus, order: newOrderIndex ?? f.order, updatedAt: new Date(now) } : f
                 ),
             }));
         } catch (error) {
@@ -285,23 +256,20 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
     },
 
     reorderFeatures: async (projectId, status, orderedIds) => {
+        const now = new Date().toISOString();
         try {
-            const now = new Date().toISOString();
-
-            // We perform updates in a loop for simplicity, in a real app would use a transaction
+            // Bulk update order indices
             for (let i = 0; i < orderedIds.length; i++) {
                 await dbService.execute(
-                    'UPDATE features SET orderIndex = ?, updatedAt = ? WHERE id = ?',
+                    'UPDATE Features SET orderIndex = ?, updatedAt = ? WHERE id = ?',
                     [i, now, orderedIds[i]]
                 );
             }
 
             set((state) => ({
-                features: state.features.map((f) => {
-                    if (f.projectId !== projectId || f.status !== status) return f;
-                    const newOrder = orderedIds.indexOf(f.id);
-                    if (newOrder === -1) return f;
-                    return { ...f, order: newOrder, updatedAt: new Date(now) };
+                features: state.features.map(f => {
+                    const newIndex = orderedIds.indexOf(f.id);
+                    return newIndex !== -1 ? { ...f, order: newIndex, updatedAt: new Date(now) } : f;
                 }),
             }));
         } catch (error) {
@@ -314,42 +282,38 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
         const now = new Date().toISOString();
         try {
             await dbService.execute(
-                'UPDATE features SET automationStatus = ?, updatedAt = ? WHERE id = ?',
+                'UPDATE Features SET automationStatus = ?, updatedAt = ? WHERE id = ?',
                 [status, now, id]
             );
             set((state) => ({
-                features: state.features.map((f) =>
-                    f.id === id ? { ...f, automationStatus: status, updatedAt: new Date(now) } : f
-                ),
+                features: state.features.map(f => f.id === id ? { ...f, automationStatus: status, updatedAt: new Date(now) } : f),
             }));
         } catch (error) {
             console.error('Failed to update automation status:', error);
+            throw error;
         }
     },
 
     addAutomationLog: async (id, step, message, type = 'info') => {
-        const now = new Date();
-        const nowIso = now.toISOString();
+        const now = new Date().toISOString();
+        const state = get();
+        const feature = state.features.find(f => f.id === id);
+        if (!feature) return;
+
+        const newLog = { timestamp: new Date(now), step, message, type };
+        const updatedLogs = [...feature.automationLogs, newLog];
 
         try {
-            const feature = get().features.find(f => f.id === id);
-            if (!feature) return;
-
-            const newLog = { timestamp: now, step, message, type };
-            const updatedLogs = [...feature.automationLogs, newLog];
-
             await dbService.execute(
-                'UPDATE features SET automationLogs = ?, updatedAt = ? WHERE id = ?',
-                [dbService.serialize(updatedLogs), nowIso, id]
+                'UPDATE Features SET automationLogs = ?, updatedAt = ? WHERE id = ?',
+                [dbService.serialize(updatedLogs), now, id]
             );
-
             set((state) => ({
-                features: state.features.map((f) =>
-                    f.id === id ? { ...f, automationLogs: updatedLogs, updatedAt: now } : f
-                ),
+                features: state.features.map(f => f.id === id ? { ...f, automationLogs: updatedLogs, updatedAt: new Date(now) } : f),
             }));
         } catch (error) {
             console.error('Failed to add automation log:', error);
+            throw error;
         }
     },
 
@@ -357,35 +321,29 @@ export const useFeatureStore = create<FeatureState & FeatureActions>((set, get) 
         const now = new Date().toISOString();
         try {
             await dbService.execute(
-                'UPDATE features SET automationLogs = "[]", updatedAt = ? WHERE id = ?',
-                [now, id]
+                'UPDATE Features SET automationLogs = ?, updatedAt = ? WHERE id = ?',
+                [dbService.serialize([]), now, id]
             );
             set((state) => ({
-                features: state.features.map((f) =>
-                    f.id === id ? { ...f, automationLogs: [], updatedAt: new Date(now) } : f
-                ),
+                features: state.features.map(f => f.id === id ? { ...f, automationLogs: [], updatedAt: new Date(now) } : f),
             }));
         } catch (error) {
             console.error('Failed to clear automation logs:', error);
+            throw error;
         }
     },
 
-    setLoading: (loading) => {
-        set({ isLoading: loading });
-    },
-
-    setError: (error) => {
-        set({ error });
-    },
-
+    setLoading: (loading) => set({ isLoading: loading }),
+    setError: (error) => set({ error }),
     deleteFeaturesByProject: async (projectId) => {
         try {
-            await dbService.execute('DELETE FROM features WHERE projectId = ?', [projectId]);
+            await dbService.execute('DELETE FROM Features WHERE projectId = ?', [projectId]);
             set((state) => ({
-                features: state.features.filter((f) => f.projectId !== projectId),
+                features: state.features.filter(f => f.projectId !== projectId),
             }));
         } catch (error) {
             console.error('Failed to delete features by project:', error);
+            throw error;
         }
     },
 }));

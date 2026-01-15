@@ -1,167 +1,177 @@
-import Database from '@tauri-apps/plugin-sql';
+import { invoke } from '@tauri-apps/api/core';
 
 /**
- * Database Service with Web Fallback
- * Uses SQLite in Tauri, and LocalStorage in the browser.
+ * Database Service with SQL Server (Native Bridge) and Web Fallback
+ * Orchestrates cloud persistence with Multi-tenancy support.
  */
-
 class DbService {
-  private db: Database | null = null;
-  private dbPath = 'sqlite:project_maker.db';
-  private isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+  private isTauri = !!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__;
+
+  // For now, these will be hardcoded. Later they will come from Auth.
+  private currentUserId = 'default-user-uuid';
+  private currentTenantId = 'default-tenant-uuid';
 
   /**
-   * Initialize the database
+   * Initialize the database and run cloud migrations
    */
   async init() {
-    console.log(`[DbService] Initializing. Mode: ${this.isTauri ? 'Tauri (SQLite)' : 'Browser (LocalStorage)'}`);
-
+    console.log(`[DbService] Initializing. Mode: ${this.isTauri ? 'Tauri (SQL Server Bridge)' : 'Browser (LocalStorage)'}`);
     if (this.isTauri) {
-      if (this.db) return this.db;
       try {
-        this.db = await Database.load(this.dbPath);
         await this.runMigrations();
-        return this.db;
-      } catch (error) {
-        console.error('[DbService] SQLite Init Error:', error);
-        throw error;
+        await this.seedDefaultData();
+        console.log('[DbService] Cloud migrations completed.');
+      } catch (err) {
+        console.error('[DbService] Native Init Failed.', err);
+        throw err; // Re-throw so App.tsx knows it failed
       }
     }
-
-    // Browser fallback doesn't need "init" as localStorage is always there
-    return null;
   }
 
   private async runMigrations() {
-    if (!this.db) return;
+    if (!this.isTauri) return;
 
-    await this.db.execute(`
-      CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        path TEXT NOT NULL,
-        description TEXT,
-        settings TEXT,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
-      )
-    `);
+    console.log('[DbService] Running migrations...');
 
-    await this.db.execute(`
-      CREATE TABLE IF NOT EXISTS features (
-        id TEXT PRIMARY KEY,
-        projectId TEXT NOT NULL,
-        title TEXT NOT NULL,
-        description TEXT,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        complexity TEXT NOT NULL,
-        keyPoints TEXT,
-        acceptanceCriteria TEXT,
-        suggestedTests TEXT,
-        dependencies TEXT,
-        automationStatus TEXT NOT NULL,
-        automationLogs TEXT,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL,
-        orderIndex INTEGER DEFAULT 0,
-        FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
-      )
-    `);
+    // Use sys.tables which is more reliable in Azure SQL
+    const migrations = [
+      // Tenants
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Tenants')
+       CREATE TABLE Tenants (
+         id NVARCHAR(50) PRIMARY KEY,
+         name NVARCHAR(255) NOT NULL,
+         createdAt DATETIME2 DEFAULT GETDATE(),
+         updatedAt DATETIME2 DEFAULT GETDATE()
+       )`,
 
-    await this.db.execute(`
-      CREATE TABLE IF NOT EXISTS settings (
-        id TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `);
-  }
+      // Users
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Users')
+       CREATE TABLE Users (
+         id NVARCHAR(50) PRIMARY KEY,
+         email NVARCHAR(255) NOT NULL UNIQUE,
+         name NVARCHAR(255),
+         tenantId NVARCHAR(50) NOT NULL,
+         createdAt DATETIME2 DEFAULT GETDATE(),
+         updatedAt DATETIME2 DEFAULT GETDATE(),
+         CONSTRAINT FK_User_Tenant FOREIGN KEY (tenantId) REFERENCES Tenants(id)
+       )`,
 
-  /**
-   * Execute a query (SELECT)
-   */
-  async query<T>(sql: string, bindValues: any[] = []): Promise<T[]> {
-    console.log(`[DbService] QUERY: ${sql}`, bindValues);
+      // Projects
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Projects')
+       CREATE TABLE Projects (
+         id NVARCHAR(50) PRIMARY KEY,
+         name NVARCHAR(255) NOT NULL,
+         path NVARCHAR(MAX) NOT NULL,
+         description NVARCHAR(MAX),
+         settings NVARCHAR(MAX),
+         tenantId NVARCHAR(50) NOT NULL,
+         userId NVARCHAR(50) NOT NULL,
+         createdAt DATETIME2 DEFAULT GETDATE(),
+         updatedAt DATETIME2 DEFAULT GETDATE(),
+         CONSTRAINT FK_Project_Tenant FOREIGN KEY (tenantId) REFERENCES Tenants(id),
+         CONSTRAINT FK_Project_User FOREIGN KEY (userId) REFERENCES Users(id)
+       )`,
 
-    if (this.isTauri) {
-      const db = await this.init();
-      return await db!.select<T[]>(sql, bindValues);
-    }
+      // Features
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Features')
+       CREATE TABLE Features (
+         id NVARCHAR(50) PRIMARY KEY,
+         projectId NVARCHAR(50) NOT NULL,
+         title NVARCHAR(255) NOT NULL,
+         description NVARCHAR(MAX),
+         status NVARCHAR(50) NOT NULL,
+         priority NVARCHAR(50) NOT NULL,
+         complexity NVARCHAR(50) NOT NULL,
+         keyPoints NVARCHAR(MAX),
+         acceptanceCriteria NVARCHAR(MAX),
+         suggestedTests NVARCHAR(MAX),
+         dependencies NVARCHAR(MAX),
+         automationStatus NVARCHAR(50) NOT NULL,
+         automationLogs NVARCHAR(MAX),
+         orderIndex INT DEFAULT 0,
+         createdAt DATETIME2 DEFAULT GETDATE(),
+         updatedAt DATETIME2 DEFAULT GETDATE(),
+         CONSTRAINT FK_Feature_Project FOREIGN KEY (projectId) REFERENCES Projects(id) ON DELETE CASCADE
+       )`,
 
-    // --- Web Fallback Logic ---
-    const table = sql.match(/FROM\s+(\w+)/i)?.[1];
-    if (!table) return [];
+      // Settings
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Settings')
+       CREATE TABLE Settings (
+         id NVARCHAR(50) PRIMARY KEY,
+         value NVARCHAR(MAX) NOT NULL
+       )`
+    ];
 
-    const data = JSON.parse(localStorage.getItem(`db_${table}`) || '[]');
-
-    // Simple filter for "WHERE projectId = ?"
-    if (sql.includes('WHERE projectId = ?') && bindValues.length > 0) {
-      return data.filter((item: any) => item.projectId === bindValues[0]) as T[];
-    }
-
-    // Simple filter for "WHERE id = ?"
-    if (sql.includes('WHERE id = ?') && bindValues.length > 0) {
-      return data.filter((item: any) => item.id === bindValues[0]) as T[];
-    }
-
-    return data as T[];
-  }
-
-  /**
-   * Execute a command (INSERT, UPDATE, DELETE)
-   */
-  async execute(sql: string, bindValues: any[] = []) {
-    console.log(`[DbService] EXECUTE: ${sql}`, bindValues);
-
-    if (this.isTauri) {
-      const db = await this.init();
-      return await db!.execute(sql, bindValues);
-    }
-
-    // --- Web Fallback Logic ---
-    const isInsert = sql.startsWith('INSERT');
-    const isUpdate = sql.startsWith('UPDATE');
-    const isDelete = sql.startsWith('DELETE');
-    const table = sql.match(/(?:INTO|UPDATE|FROM)\s+(\w+)/i)?.[1];
-
-    if (!table) return;
-
-    let data = JSON.parse(localStorage.getItem(`db_${table}`) || '[]');
-
-    if (isInsert) {
-      // Map bindValues to columns based on table
-      let newItem: any = {};
-      if (table === 'projects') {
-        newItem = { id: bindValues[0], name: bindValues[1], path: bindValues[2], description: bindValues[3], settings: bindValues[4], createdAt: bindValues[5], updatedAt: bindValues[6] };
-      } else if (table === 'features') {
-        newItem = { id: bindValues[0], projectId: bindValues[1], title: bindValues[2], description: bindValues[3], status: bindValues[4], priority: bindValues[5], complexity: bindValues[6], keyPoints: bindValues[7], acceptanceCriteria: bindValues[8], suggestedTests: bindValues[9], dependencies: bindValues[10], automationStatus: bindValues[11], automationLogs: bindValues[12], createdAt: bindValues[13], updatedAt: bindValues[14], orderIndex: bindValues[15] };
-      } else if (table === 'settings') {
-        data = data.filter((item: any) => item.id !== bindValues[0]); // Replace logic
-        newItem = { id: bindValues[0], value: bindValues[1] };
+    for (const sql of migrations) {
+      try {
+        await invoke('execute_sql', { sql, params: [] });
+      } catch (err) {
+        console.error(`[DbService] Migration failed for SQL: ${sql.substring(0, 50)}...`, err);
+        throw err;
       }
-      data.push(newItem);
-    } else if (isUpdate) {
-      const id = bindValues[bindValues.length - 1]; // Usually ID is last in updates
-      data = data.map((item: any) => (item.id === id ? { ...item, ...this.parseUpdateValues(sql, bindValues) } : item));
-    } else if (isDelete) {
-      const id = bindValues[0];
-      data = data.filter((item: any) => item.id !== id);
     }
-
-    localStorage.setItem(`db_${table}`, JSON.stringify(data));
-    return { lastInsertId: 0, rowsAffected: 1 };
   }
 
-  private parseUpdateValues(sql: string, values: any[]) {
-    // Very crude parser for mock updates
-    return {};
+  /**
+   * Seed default tenant and user if they don't exist
+   */
+  private async seedDefaultData() {
+    console.log('[DbService] Seeding default data...');
+    // Check if default tenant exists
+    const tenants = await this.query<any>('SELECT * FROM Tenants WHERE id = ?', [this.currentTenantId]);
+    if (tenants.length === 0) {
+      await this.execute('INSERT INTO Tenants (id, name) VALUES (?, ?)', [this.currentTenantId, 'Default Workspace']);
+    }
+
+    // Check if default user exists
+    const users = await this.query<any>('SELECT * FROM Users WHERE id = ?', [this.currentUserId]);
+    if (users.length === 0) {
+      await this.execute('INSERT INTO Users (id, email, name, tenantId) VALUES (?, ?, ?, ?)',
+        [this.currentUserId, 'admin@example.com', 'Administrator', this.currentTenantId]);
+    }
+  }
+
+  getTenantId() { return this.currentTenantId; }
+  getUserId() { return this.currentUserId; }
+
+  /**
+   * Run a SELECT query
+   */
+  async query<T>(sql: string, params: any[] = []): Promise<T[]> {
+    if (this.isTauri) {
+      try {
+        return await invoke<T[]>('query_sql', { sql, params });
+      } catch (error) {
+        console.error(`[DbService] QUERY ERROR: ${sql}`, error);
+        throw error;
+      }
+    }
+    return [];
+  }
+
+  /**
+   * Run an EXECUTE command
+   */
+  async execute(sql: string, params: any[] = []) {
+    if (this.isTauri) {
+      try {
+        const rowsAffected = await invoke<number>('execute_sql', { sql, params });
+        return { rowsAffected };
+      } catch (error) {
+        console.error(`[DbService] EXECUTE ERROR: ${sql}`, error);
+        throw error;
+      }
+    }
+    return { rowsAffected: 1 };
   }
 
   serialize(data: any): string { return JSON.stringify(data); }
-  deserialize<T>(data: string | null): T {
+  deserialize<T>(data: any): T {
     if (!data) return [] as any;
-    try { return typeof data === 'string' ? JSON.parse(data) : data; }
-    catch { return data as any; }
+    if (typeof data === 'string') {
+      try { return JSON.parse(data); } catch { return data as any; }
+    }
+    return data as T;
   }
 }
 

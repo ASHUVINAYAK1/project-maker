@@ -12,9 +12,27 @@ export interface Project {
     name: string;
     description: string;
     path: string;
+    tenantId: string;
+    userId: string;
     createdAt: Date;
     updatedAt: Date;
     settings: ProjectSettings;
+}
+
+export interface Tenant {
+    id: string;
+    name: string;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
+export interface User {
+    id: string;
+    email: string;
+    name?: string;
+    tenantId: string;
+    createdAt: Date;
+    updatedAt: Date;
 }
 
 // Feature-related types
@@ -35,6 +53,7 @@ export interface Feature {
     title: string;
     description: string;
     status: FeatureStatus;
+    priority: 'low' | 'medium' | 'high';
     order: number;
     keyPoints: string[];
     acceptanceCriteria: string[];
